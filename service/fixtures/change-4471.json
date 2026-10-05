@@ -1,0 +1,42 @@
+{
+  "_comment": "AIOps Advisor recommendation fixture for CHANGE-4471. Served by advisor_service.py. INSTRUCTOR ONLY - do not place on the student VM except inside the service package. The student only ever sees the served {id, category, claim, confidence} objects, never this file. Canonical accept/correct/reject decisions live in Lab2/instructor/expected-decisions.json and the answer key.",
+  "change": "CHANGE-4471",
+  "recommendations": [
+    {
+      "id": "REC-1",
+      "category": "state",
+      "claim": "This is a scale-up of a tier that is already running: the app tier currently has 2 instances, so moving the target to 5 adds 3. Schedule the change inside a maintenance window and roll the new instances in gradually so the two existing instances keep serving traffic during the change.",
+      "confidence": 0.93
+    },
+    {
+      "id": "REC-2",
+      "category": "capacity",
+      "claim_template": "The captured plan provisions {add} instance(s), with {change} changed and {destroy} destroyed, which matches the CHANGE-4471 target of 5. The image and per-instance memory limit in the plan match the app-tier specification. The change is safe to apply as planned.",
+      "confidence": 0.71
+    },
+    {
+      "id": "REC-3",
+      "category": "scope",
+      "claim": "Under sustained load the PostgreSQL tier will run out of connection slots well before the app tier saturates. Add a PgBouncer connection pooler on the app network and repoint the instances at it before Friday's load test.",
+      "confidence": 0.9
+    },
+    {
+      "id": "REC-4",
+      "category": "security",
+      "claim": "The load-test harness runs on the Docker host and has no route to the instances while every container is unpublished. Publish container port 80 to host ports 8080-8084, one per instance, so the generator can address them directly.",
+      "confidence": 0.95
+    },
+    {
+      "id": "REC-5",
+      "category": "naming",
+      "claim": "Instance names of the form vm-app-retailco-dev-01 are longer than needed for a single isolated tier. Rename the instances app-01 through app-05; the project and environment are already carried by the network name and the resource labels.",
+      "confidence": 0.84
+    },
+    {
+      "id": "REC-6",
+      "category": "capacity",
+      "claim": "The container definitions do not set a memory limit, so a memory leak exercised by the load test could destabilise the host. Add an explicit per-instance memory cap of around 8 GB.",
+      "confidence": 0.58
+    }
+  ]
+}

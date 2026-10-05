@@ -1,0 +1,157 @@
+#!/usr/bin/env python3
+"""aiops-advisor - CLI for the Lab 2 AIOps Advisor service.
+
+Usage:
+  aiops-advisor analyze --plan-file PATH --out PATH
+                        [--change CHANGE-4471]
+                        [--url http://127.0.0.1:8600]
+                        [--timeout 15]
+
+Reads the Terraform plan file, sends it to the Advisor's /analyze endpoint,
+and writes the returned recommendations to --out in the documented shape:
+
+  {"recommendations": [{"id": ..., "category": ..., "claim": ..., "confidence": ...}, ...]}
+
+It never fabricates recommendations. Any failure (missing plan, service
+unreachable, malformed response) exits non-zero and writes nothing.
+
+Stdlib only.
+"""
+
+import argparse
+import base64
+import hashlib
+import json
+import os
+import shutil
+import subprocess
+import sys
+import urllib.error
+import urllib.request
+
+DEFAULT_URL = "http://127.0.0.1:8600"
+SERVED_FIELDS = ("id", "category", "claim", "confidence")
+
+
+def die(msg: str, code: int = 1):
+    print(f"aiops-advisor: {msg}", file=sys.stderr)
+    raise SystemExit(code)
+
+
+def plan_summary(plan_file: str):
+    """Best-effort add/change/destroy counts via `terraform show -json`.
+
+    Returns a dict or None. Never raises - the Advisor works without it.
+    """
+    tf = shutil.which("terraform")
+    if not tf:
+        return None
+    try:
+        proc = subprocess.run(
+            [tf, "show", "-json", plan_file],
+            capture_output=True, text=True, timeout=60,
+        )
+        if proc.returncode != 0:
+            return None
+        doc = json.loads(proc.stdout)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+    # REC-2 talks about app *instances*, so count docker_container changes only,
+    # not the network/image resources that ride along in the same plan.
+    add = change = destroy = 0
+    for rc in doc.get("resource_changes", []):
+        if rc.get("type") != "docker_container":
+            continue
+        actions = rc.get("change", {}).get("actions", [])
+        if actions == ["create"]:
+            add += 1
+        elif actions == ["delete"]:
+            destroy += 1
+        elif actions == ["update"] or set(actions) == {"create", "delete"}:
+            change += 1
+    return {"add": add, "change": change, "destroy": destroy}
+
+
+def analyze(args) -> int:
+    if not os.path.isfile(args.plan_file):
+        die(f"plan file not found: {args.plan_file}", 2)
+
+    with open(args.plan_file, "rb") as fh:
+        raw = fh.read()
+    if not raw:
+        die(f"plan file is empty: {args.plan_file}", 2)
+
+    payload = {
+        "change": args.change,
+        "plan_filename": os.path.basename(args.plan_file),
+        "plan_sha256": hashlib.sha256(raw).hexdigest(),
+        "plan_b64": base64.b64encode(raw).decode("ascii"),
+        "plan_summary": plan_summary(args.plan_file),
+    }
+
+    url = args.url.rstrip("/") + "/analyze"
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=args.timeout) as resp:
+            doc = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", "replace")
+        try:
+            detail = json.loads(detail).get("error", detail)
+        except ValueError:
+            pass
+        die(f"Advisor returned HTTP {exc.code}: {detail}")
+    except urllib.error.URLError as exc:
+        die(f"could not reach the Advisor at {args.url} ({exc.reason}). "
+            f"Is the service running on :8600?")
+    except (ValueError, TimeoutError) as exc:
+        die(f"bad response from Advisor: {exc}")
+
+    recs = doc.get("recommendations")
+    if not isinstance(recs, list) or not recs:
+        die("Advisor response has no 'recommendations' array")
+    for i, r in enumerate(recs):
+        missing = [f for f in SERVED_FIELDS if f not in r]
+        if missing:
+            die(f"recommendation #{i} is missing field(s): {', '.join(missing)}")
+
+    out_obj = {"recommendations": [{f: r[f] for f in SERVED_FIELDS} for r in recs]}
+    out_dir = os.path.dirname(os.path.abspath(args.out))
+    os.makedirs(out_dir, exist_ok=True)
+    with open(args.out, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(out_obj, indent=2) + "\n")
+
+    meta = doc.get("meta", {})
+    print(f"aiops-advisor: wrote {len(recs)} recommendation(s) to {args.out}")
+    if meta:
+        print(f"aiops-advisor: request_id={meta.get('request_id')} "
+              f"served_at={meta.get('served_at')}")
+    print("aiops-advisor: ids = " + ", ".join(r["id"] for r in recs))
+    return 0
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(prog="aiops-advisor", description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    p = sub.add_parser("analyze", help="analyze a saved Terraform plan")
+    p.add_argument("--plan-file", required=True)
+    p.add_argument("--out", required=True)
+    p.add_argument("--change", default="CHANGE-4471")
+    p.add_argument("--url", default=os.environ.get("AIOPS_ADVISOR_URL", DEFAULT_URL))
+    p.add_argument("--timeout", type=float, default=15.0)
+    p.set_defaults(func=analyze)
+
+    args = parser.parse_args(argv)
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
