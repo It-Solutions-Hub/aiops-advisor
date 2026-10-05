@@ -1,1 +1,11 @@
 cd /tmp/aiops-advisor && sudo install -m 0755 -d /opt/aiops-advisor/fixtures /var/log/aiops-advisor && sudo install -m 0644 service/advisor_service.py /opt/aiops-advisor/ && sudo install -m 0644 service/fixtures/*.json /opt/aiops-advisor/fixtures/ && sudo install -m 0755 cli/aiops-advisor /usr/local/bin/aiops-advisor
+
+id aiops >/dev/null 2>&1 || sudo useradd --system --no-create-home --shell /usr/sbin/nologin aiops; sudo chown -R aiops:aiops /var/log/aiops-advisor
+
+sudo install -m 0644 /tmp/aiops-advisor/deploy/aiops-advisor.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl enable --now aiops-advisor
+
+systemctl is-active aiops-advisor && curl -s localhost:8600/healthz
+
+rm -rf /tmp/aiops-advisor
+
+sudo journalctl -u aiops-advisor -n 20 --no-pager
