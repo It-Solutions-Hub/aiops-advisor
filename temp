@@ -1,0 +1,1 @@
+cd /tmp/aiops-advisor && sudo install -m 0755 -d /opt/aiops-advisor/fixtures /var/log/aiops-advisor && sudo install -m 0644 service/advisor_service.py /opt/aiops-advisor/ && sudo install -m 0644 service/fixtures/*.json /opt/aiops-advisor/fixtures/ && sudo install -m 0755 cli/aiops-advisor /usr/local/bin/aiops-advisor
